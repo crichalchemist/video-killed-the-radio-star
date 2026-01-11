@@ -1,40 +1,49 @@
 """
 # Automatic Speech Recognition utilities
 
-Currently uses openai/whisper. To install: 
+Currently uses openai/whisper. To install:
   pip install git+https://github.com/openai/whisper
 """
 
 import time
 
+import torch
 import tokenizations
 from vktrs.utils import remove_punctuation
 import whisper
 
+# Auto-detect device (GPU if available, else CPU)
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def whisper_transcribe(
     audio_fpath="audio.mp3",
+    model_size='large',
+    language='en',
 ):
-    whispers = {
-        'tiny':None, # 5.83 s
-        'large':None # 3.73 s
-    }
-    # accelerated runtime required for whisper
-    # to do: pypi package for whisper
-    
-    for k in whispers.keys():
-        options = whisper.DecodingOptions(
-            language='en',
-        )
-        # to do: be more proactive about cleaning up these models when we're done with them
-        model = whisper.load_model(k).to('cuda')
-        start = time.time()
-        print(f"Transcribing audio with whisper-{k}")
-        
-        # to do: calling transcribe like this unnecessarily re-processes audio each time.
-        whispers[k] = model.transcribe(audio_fpath) # re-processes audio each time, ~10s overhead?
-        print(f"elapsed: {time.time()-start}")
-    return whispers
+    """
+    Transcribe audio using OpenAI Whisper.
+
+    Args:
+        audio_fpath: Path to audio file
+        model_size: Whisper model size ('tiny', 'base', 'small', 'medium', 'large')
+        language: Language code (default 'en')
+
+    Returns:
+        dict: Whisper transcription with 'text', 'segments', 'language'
+    """
+    print(f"🎤 Loading Whisper '{model_size}' model on {DEVICE}")
+    model = whisper.load_model(model_size).to(DEVICE)
+
+    start = time.time()
+    print(f"   Transcribing audio...")
+    transcription = model.transcribe(audio_fpath, language=language)
+
+    elapsed = time.time() - start
+    num_segments = len(transcription.get('segments', []))
+    print(f"   ✓ Transcribed {num_segments} segments in {elapsed:.1f}s")
+
+    return transcription
 
 
 def whisper_align(whispers):
@@ -175,15 +184,39 @@ def whisper_segment_transcription(
     return prompt_starts
 
 
-def whisper_lyrics(audio_fpath="audio.mp3"):
-    whispers = whisper_transcribe(audio_fpath)
-    tiny2large, large2tiny, whispers_tokens = whisper_align(whispers)
-    token_large_index_segmentations = whisper_transmit_meta_across_alignment(
-        whispers,
-        large2tiny,
-        whispers_tokens,
-    )
-    prompt_starts = whisper_segment_transcription(
-        token_large_index_segmentations,
-    )
+def whisper_lyrics(audio_fpath="audio.mp3", model_size='large'):
+    """
+    Extract lyrical segments with timestamps from audio.
+
+    Args:
+        audio_fpath: Path to audio file
+        model_size: Whisper model size (default 'large')
+
+    Returns:
+        list: Dicts with 'ts' (timestamp) and 'prompt' (lyric text)
+    """
+    transcription = whisper_transcribe(audio_fpath, model_size=model_size)
+
+    # Convert Whisper segments to prompt_starts format
+    prompt_starts = [
+        {
+            'ts': segment['start'],
+            'prompt': segment['text'].strip()
+        }
+        for segment in transcription['segments']
+    ]
+
+    print(f"   ✓ Extracted {len(prompt_starts)} lyrical segments")
     return prompt_starts
+
+
+# Legacy functions kept for backward compatibility but marked as deprecated
+def whisper_align(whispers):
+    """
+    DEPRECATED: No longer needed with single-model approach.
+    Use whisper_transcribe() directly instead.
+    """
+    raise DeprecationWarning(
+        "whisper_align() is deprecated. "
+        "Use whisper_transcribe() with model_size='large' instead."
+    )
