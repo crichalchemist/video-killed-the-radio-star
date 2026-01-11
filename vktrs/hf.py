@@ -1,10 +1,13 @@
-from pathlib import Path
+import logging
+import threading
 import torch
 from torch import autocast
 from diffusers import (
     StableDiffusionImg2ImgPipeline,
     StableDiffusionPipeline,
 )
+
+logger = logging.getLogger(__name__)
 
 # weird, why didn't this install with vktrs?
 #!pip install pytokenizations yt-dlp python-tsp webvtt-py
@@ -45,60 +48,75 @@ class HfHelper:
         # Lazy loading - pipelines created on first access
         self._text2img = None
         self._img2img = None
+        
+        # Thread locks for lazy initialization
+        self._img2img_lock = threading.Lock()
+        self._text2img_lock = threading.Lock()
 
-        print(f"🎨 Initialized HfHelper on device: {self.device}")
+        logger.info(f"🎨 Initialized HfHelper on device: {self.device}")
 
     def _optimize_pipeline(self, pipe):
         """Apply memory optimizations to pipeline"""
         try:
             pipe.enable_xformers_memory_efficient_attention()
-            print("  ✓ Using xformers (20-30% memory savings)")
-        except:
+            logger.info("  ✓ Using xformers (20-30% memory savings)")
+        except (ImportError, AttributeError, RuntimeError) as e:
+            logger.info(f"  ✓ Using attention slicing (fallback): {e}")
             pipe.enable_attention_slicing()
-            print("  ✓ Using attention slicing (fallback)")
         return pipe
 
     @property
     def img2img(self):
         """Lazy load img2img pipeline on first access"""
         if self._img2img is None:
-            print(f"📥 Loading img2img pipeline to {self.device}...")
-            if self.download:
-                self._img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
-                    self.model_id,
-                    revision="fp16",
-                    torch_dtype=torch.float16,
-                    use_auth_token=True
-                )
-                self._img2img = self._img2img.to(self.device)
-                self._img2img.save_pretrained(self.model_path)
-            else:
-                self._img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
-                    self.model_path,
-                    local_files_only=True
-                ).to(self.device)
+            with self._img2img_lock:
+                # Double-check pattern
+                if self._img2img is None:
+                    logger.info(f"📥 Loading img2img pipeline to {self.device_img2img}...")
+                    if self.download:
+                        self._img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
+                            self.model_id,
+                            revision="fp16",
+                            torch_dtype=torch.float16,
+                            use_auth_token=True
+                        )
+                        self._img2img = self._img2img.to(self.device_img2img)
+                        self._img2img.save_pretrained(self.model_path)
+                    else:
+                        self._img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
+                            self.model_path,
+                            local_files_only=True
+                        ).to(self.device_img2img)
 
-            self._img2img = self._optimize_pipeline(self._img2img)
+                    self._img2img = self._optimize_pipeline(self._img2img)
         return self._img2img
 
     @property
     def text2img(self):
         """Lazy load text2img pipeline on first access"""
         if self._text2img is None:
-            print(f"📥 Loading text2img pipeline to {self.device}...")
-            # text2img shares components with img2img
-            img2img_pipe = self.img2img  # This will load img2img if not already loaded
-
-            self._text2img = StableDiffusionPipeline(
-                vae=img2img_pipe.vae,
-                text_encoder=img2img_pipe.text_encoder,
-                tokenizer=img2img_pipe.tokenizer,
-                unet=img2img_pipe.unet,
-                feature_extractor=img2img_pipe.feature_extractor,
-                scheduler=img2img_pipe.scheduler,
-                safety_checker=img2img_pipe.safety_checker,
-            )
-            self._text2img = self._optimize_pipeline(self._text2img)
+            with self._text2img_lock:
+                # Double-check pattern
+                if self._text2img is None:
+                    logger.info(f"📥 Loading text2img pipeline to {self.device_text2img}...")
+                    
+                    # Create text2img from pretrained rather than sharing components
+                    # This allows proper device placement
+                    if self.download:
+                        self._text2img = StableDiffusionPipeline.from_pretrained(
+                            self.model_id,
+                            revision="fp16",
+                            torch_dtype=torch.float16,
+                            use_auth_token=True
+                        )
+                        self._text2img = self._text2img.to(self.device_text2img)
+                    else:
+                        self._text2img = StableDiffusionPipeline.from_pretrained(
+                            self.model_path,
+                            local_files_only=True
+                        ).to(self.device_text2img)
+                    
+                    self._text2img = self._optimize_pipeline(self._text2img)
         return self._text2img
 
     def get_image_for_prompt(

@@ -1,0 +1,5 @@
+# Development Dependencies
+
+# Testing
+pytest>=7.4.0
+pytest-timeout>=2.4.0  # For timeout support in tests

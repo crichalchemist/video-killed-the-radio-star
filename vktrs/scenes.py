@@ -5,7 +5,8 @@ Scenes are the fundamental timeline units in VKTRS, typically derived from
 lyrical segments or musical structure.
 """
 
-from typing import List, Dict, Optional
+from typing import List, Dict
+import copy
 import numpy as np
 from sklearn.cluster import AgglomerativeClustering
 
@@ -24,9 +25,30 @@ def create_scenes_from_lyrics(transcription: Dict,
     Returns:
         List of scene dicts with 'start_time', 'end_time', 'text'
     """
+    # Validate input
+    if not isinstance(transcription, dict):
+        raise TypeError(f"transcription must be a dict, got {type(transcription).__name__}")
+    if 'segments' not in transcription:
+        raise ValueError("transcription must contain 'segments' key")
+    if min_scene_duration <= 0:
+        raise ValueError(f"min_scene_duration must be positive, got {min_scene_duration}")
+    if max_scene_duration <= 0:
+        raise ValueError(f"max_scene_duration must be positive, got {max_scene_duration}")
+    if min_scene_duration > max_scene_duration:
+        raise ValueError(f"min_scene_duration ({min_scene_duration}) must be <= max_scene_duration ({max_scene_duration})")
+    if not transcription['segments']:
+        return []
+    
     scenes = []
 
     for segment in transcription['segments']:
+        # Validate segment has required keys
+        if 'start' not in segment or 'end' not in segment:
+            raise ValueError(f"Segment missing required 'start' or 'end' key: {segment}")
+        if 'text' not in segment:
+            # Use empty text if missing
+            segment['text'] = ''
+        
         scene = {
             'start_time': segment['start'],
             'end_time': segment['end'],
@@ -57,9 +79,18 @@ def subdivide_long_scenes(scenes: List[Dict],
     Returns:
         List of scenes with long scenes subdivided
     """
+    if not isinstance(scenes, list):
+        raise TypeError(f"scenes must be a list, got {type(scenes).__name__}")
+    if max_duration <= 0:
+        raise ValueError(f"max_duration must be positive, got {max_duration}")
+    
     result = []
 
     for scene in scenes:
+        # Validate scene has required keys
+        if 'start_time' not in scene or 'end_time' not in scene:
+            raise ValueError(f"Scene missing required 'start_time' or 'end_time' key: {scene}")
+        
         duration = scene['end_time'] - scene['start_time']
 
         if duration <= max_duration:
@@ -70,7 +101,7 @@ def subdivide_long_scenes(scenes: List[Dict],
             part_duration = duration / n_parts
 
             for i in range(n_parts):
-                part = scene.copy()
+                part = copy.deepcopy(scene)
                 part['start_time'] = scene['start_time'] + i * part_duration
                 part['end_time'] = scene['start_time'] + (i + 1) * part_duration
 
@@ -95,6 +126,10 @@ def merge_short_scenes(scenes: List[Dict],
     Returns:
         List of scenes with short scenes merged
     """
+    if not isinstance(scenes, list):
+        raise TypeError(f"scenes must be a list, got {type(scenes).__name__}")
+    if min_duration <= 0:
+        raise ValueError(f"min_duration must be positive, got {min_duration}")
     if not scenes:
         return scenes
 
@@ -102,6 +137,13 @@ def merge_short_scenes(scenes: List[Dict],
 
     for scene in scenes[1:]:
         last_scene = result[-1]
+        
+        # Validate scenes have required keys
+        if 'start_time' not in last_scene or 'end_time' not in last_scene:
+            raise ValueError(f"Scene missing required 'start_time' or 'end_time' key: {last_scene}")
+        if 'start_time' not in scene or 'end_time' not in scene:
+            raise ValueError(f"Scene missing required 'start_time' or 'end_time' key: {scene}")
+        
         last_duration = last_scene['end_time'] - last_scene['start_time']
         curr_duration = scene['end_time'] - scene['start_time']
 
@@ -136,6 +178,20 @@ def assign_themes(scenes: List[Dict],
         Dict mapping theme IDs to scene indices:
             {'theme_0': [0, 3, 5], 'theme_1': [1, 2, 4], ...}
     """
+    # Validate inputs
+    if not isinstance(scenes, list):
+        raise TypeError(f"scenes must be a list, got {type(scenes).__name__}")
+    if not scenes:
+        raise ValueError("scenes must not be empty")
+    if not isinstance(audio_analysis, dict):
+        raise TypeError(f"audio_analysis must be a dict, got {type(audio_analysis).__name__}")
+    if n_themes <= 0:
+        raise ValueError(f"n_themes must be positive, got {n_themes}")
+    if 'cqt' not in audio_analysis:
+        raise ValueError("audio_analysis must contain 'cqt' key")
+    if 'sr' not in audio_analysis:
+        raise ValueError("audio_analysis must contain 'sr' key")
+    
     cqt = audio_analysis['cqt']
     sr = audio_analysis['sr']
     hop_length = audio_analysis.get('hop_length', 512)
@@ -143,6 +199,15 @@ def assign_themes(scenes: List[Dict],
     # Extract features for each scene
     scene_features = []
     for scene in scenes:
+        # Validate scene structure
+        if 'start_time' not in scene or 'end_time' not in scene:
+            raise ValueError(f"Scene missing required 'start_time' or 'end_time' key: {scene}")
+        # Validate scene values
+        if not isinstance(scene['start_time'], (int, float)) or not isinstance(scene['end_time'], (int, float)):
+            raise ValueError(f"Scene times must be numeric: {scene}")
+        if scene['start_time'] >= scene['end_time']:
+            raise ValueError(f"Scene start_time ({scene['start_time']}) must be < end_time ({scene['end_time']})")
+        
         # Get CQT slice for this scene
         start_frame = int(scene['start_time'] * sr / hop_length)
         end_frame = int(scene['end_time'] * sr / hop_length)
@@ -202,12 +267,24 @@ def create_scenes_from_structure(audio_analysis: Dict) -> List[Dict]:
     Returns:
         List of scene dicts based on structural segments
     """
+    # Validate audio_analysis
+    if not isinstance(audio_analysis, dict):
+        raise TypeError(f"audio_analysis must be a dict, got {type(audio_analysis).__name__}")
+    if 'segments' not in audio_analysis:
+        raise ValueError("audio_analysis must contain 'segments' key")
+    if 'sr' not in audio_analysis:
+        raise ValueError("audio_analysis must contain 'sr' key")
+    
     segments = audio_analysis['segments']
     sr = audio_analysis['sr']
     hop_length = audio_analysis.get('hop_length', 512)
 
     scenes = []
     for i, segment in enumerate(segments):
+        # Validate segment has required keys
+        if 'start_frame' not in segment or 'end_frame' not in segment or 'label' not in segment:
+            raise ValueError(f"Segment {i} missing required keys ('start_frame', 'end_frame', 'label'): {segment}")
+        
         # Convert frames to time
         start_time = segment['start_frame'] * hop_length / sr
         end_time = segment['end_frame'] * hop_length / sr

@@ -1,0 +1,17 @@
+# GPU-specific Requirements
+# 
+# IMPORTANT: Install PyTorch with GPU support first using the appropriate --index-url:
+#
+#   For CUDA 12.1: pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   For CUDA 11.8: pip install torch --index-url https://download.pytorch.org/whl/cu118
+#
+#   Note: CUDA 12.0 (cu120) wheels for xformers are unverified/unavailable.
+#         Use CUDA 11.8 or 12.1 for xformers support, or build xformers from source.
+#   Visit https://pytorch.org/get-started/locally/ for other CUDA versions
+#
+# Then install xformers with the SAME --index-url:
+#
+#   pip install "xformers>=0.0.24,<0.0.28" --index-url https://download.pytorch.org/whl/cu121
+#
+# Note: xformers must match your CUDA version. Do NOT use pip install -r requirements-gpu.txt
+# directly, as pip cannot apply per-dependency index URLs. Follow the two-step process above.

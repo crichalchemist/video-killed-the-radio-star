@@ -1,0 +1,58 @@
+# VKTRS Requirements (2026 Optimized)
+#
+# GPU Users: Install PyTorch with CUDA support first!
+#   Visit https://pytorch.org/get-started/locally/ for your CUDA version
+#   Example: pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   Then: pip install -r requirements.txt
+#
+# For GPU performance optimizations, also install:
+#   pip install -r requirements-gpu.txt (after torch+CUDA setup)
+#
+# For development/testing:
+#   pip install -r requirements-dev.txt
+
+# Core ML/AI (CPU version - see note above for GPU)
+torch>=2.2.0  # GPU users: install from pytorch.org with CUDA support first
+diffusers>=0.30.0
+transformers>=4.40.0
+accelerate>=0.25.0
+
+# Audio Processing
+openai-whisper>=1.0.0  # Using semantic version for consistency
+librosa>=0.10.0
+demucs>=4.0.0
+
+# Optimization (Phase 2)
+ortools>=9.5.0  # TSP solver
+imagehash>=4.3.0  # Perceptual hashing
+
+# Data Processing
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+pandas>=2.0.0
+
+# Utilities
+Pillow>=10.0.0
+omegaconf>=2.3.0
+pyyaml>=6.0
+toolz>=0.12.0
+
+# Video
+yt-dlp>=2025.12.0  # Updated for Python 3.10+ compatibility and critical fixes
+
+# API Integration
+stability-sdk>=0.8.0
+huggingface-hub>=0.19.0
+safetensors>=0.4.0
+
+# Animation
+keyframed>=0.1.0,<0.2.0  # Pin to tested version range
+simpleeval>=0.9.13  # Safe expression evaluation for animation parameters
+
+# UI (optional)
+panel>=1.3.0
+ipywidgets>=8.1.0
+
+# Legacy TSP fallback solver (optional)
+python-tsp>=0.3.0

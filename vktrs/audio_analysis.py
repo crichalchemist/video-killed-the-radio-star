@@ -59,20 +59,20 @@ def analyze_audio_structure(audio_fpath: str,
     print(f"🎵 Analyzing audio structure: {Path(audio_fpath).name}")
 
     # Load audio
-    y, sr = librosa.load(audio_fpath, sr=sr)
-    duration = len(y) / sr
+    y, loaded_sr = librosa.load(audio_fpath, sr=sr)
+    duration = len(y) / loaded_sr
 
     # Tempo and beat tracking
-    tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
+    tempo, beats = librosa.beat.beat_track(y=y, sr=loaded_sr)
     print(f"  ✓ Tempo: {tempo:.1f} BPM")
 
     # Key detection using chromagram
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+    chroma = librosa.feature.chroma_cqt(y=y, sr=loaded_sr)
     key = estimate_key(chroma)
     print(f"  ✓ Key: {key}")
 
     # Constant-Q transform for structure
-    cqt = librosa.cqt(y, sr=sr, hop_length=hop_length)
+    cqt = librosa.cqt(y, sr=loaded_sr, hop_length=hop_length)
     cqt_mag = np.abs(cqt)
 
     # Spectral clustering for segmentation
@@ -90,7 +90,7 @@ def analyze_audio_structure(audio_fpath: str,
         'segments': segments,
         'beats': beats,
         'cqt': cqt_mag,
-        'sr': sr,
+        'sr': loaded_sr,
         'duration': duration,
         'hop_length': hop_length
     }
@@ -117,7 +117,11 @@ def estimate_key(chroma: np.ndarray) -> str:
     chroma_mean = np.mean(chroma, axis=1)
 
     # Normalize
-    chroma_mean = chroma_mean / np.sum(chroma_mean)
+    denom = np.sum(chroma_mean)
+    if denom <= np.finfo(float).eps:
+        # If sum is zero or negligible, return default key (no tonal content)
+        return 'C major'
+    chroma_mean = chroma_mean / denom
 
     # Test all rotations against major and minor profiles
     best_corr = -1
@@ -156,6 +160,10 @@ def detect_segments(cqt: np.ndarray,
     Returns:
         List of segment dicts with 'start_frame', 'end_frame', 'label'
     """
+    # Validate inputs
+    if cqt.shape[1] == 0:
+        return []
+    
     # Compute self-similarity matrix
     # Use librosa's recurrence matrix for efficient computation
     rec_matrix = librosa.segment.recurrence_matrix(
@@ -166,8 +174,10 @@ def detect_segments(cqt: np.ndarray,
     )
 
     # Apply spectral clustering
+    n_frames = cqt.shape[1]
     n_clusters = min(n_segments, len(beats) // 4) if len(beats) > 0 else n_segments
-    n_clusters = max(2, n_clusters)
+    # Ensure n_clusters doesn't exceed number of frames
+    n_clusters = min(max(2, n_clusters), n_frames)
 
     clustering = SpectralClustering(
         n_clusters=n_clusters,
@@ -193,6 +203,10 @@ def detect_segments(cqt: np.ndarray,
     else:
         # No beats detected, use uniform sampling
         full_labels = clustering.fit_predict(rec_matrix)
+    
+    # Check for empty labels
+    if len(full_labels) == 0:
+        return []
 
     # Convert to segments
     segments = []
@@ -317,7 +331,7 @@ def ensure_stems_separated(audio_fpath: str,
     # Run demucs
     print(f"🎼 Separating stems with {model}...")
     print(f"   Audio: {audio_path.name}")
-    print(f"   This may take 2-5 minutes depending on audio length...")
+    print("   This may take 2-5 minutes depending on audio length...")
 
     cmd = [
         'demucs',
@@ -326,16 +340,24 @@ def ensure_stems_separated(audio_fpath: str,
         str(audio_fpath)
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("Demucs timed out after 600 seconds")
 
     if result.returncode != 0:
         raise RuntimeError(f"Demucs failed: {result.stderr}")
+    
+    # Verify all expected stems exist
+    missing_stems = [name for name, path in expected_stems.items() if not path.exists()]
+    if missing_stems:
+        raise RuntimeError(f"Demucs completed but missing stems: {', '.join(missing_stems)}")
 
     print(f"  ✓ Stems saved to {stem_dir}")
     return expected_stems
 
 
-def load_stem(stem_fpath: str, sr: int = 22050) -> Tuple[np.ndarray, int]:
+def load_stem(stem_fpath: str, sr: int = 22050) -> Tuple[np.ndarray, float]:
     """
     Load audio stem with specified sample rate.
 
@@ -344,10 +366,10 @@ def load_stem(stem_fpath: str, sr: int = 22050) -> Tuple[np.ndarray, int]:
         sr: Target sample rate
 
     Returns:
-        (audio_data, sample_rate)
+        (audio_data, sample_rate) - sample_rate may be float in some librosa versions
     """
-    y, sr = librosa.load(stem_fpath, sr=sr)
-    return y, sr
+    y, loaded_sr = librosa.load(stem_fpath, sr=sr)
+    return y, int(loaded_sr)
 
 
 def get_stem_signal(stem_fpath: str,

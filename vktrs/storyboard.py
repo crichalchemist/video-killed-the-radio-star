@@ -11,8 +11,11 @@ The storyboard is saved as YAML for human readability and portability.
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
+import logging
 import yaml
+
+logger = logging.getLogger(__name__)
 
 try:
     from omegaconf import OmegaConf
@@ -40,6 +43,9 @@ class Storyboard:
         Args:
             config_path: Path to storyboard.yaml (None = create new)
             config_dict: Dict to initialize from (takes precedence over file)
+            
+        Raises:
+            FileNotFoundError: If config_path is provided but doesn't exist
         """
         if config_dict:
             if OMEGACONF_AVAILABLE:
@@ -47,14 +53,20 @@ class Storyboard:
             else:
                 self.config = config_dict
             self.path = None
-        elif config_path and Path(config_path).exists():
+        elif config_path:
+            # If path is provided, it must exist
+            config_path = Path(config_path)
+            if not config_path.exists():
+                raise FileNotFoundError(f"Storyboard file not found: {config_path}")
+            
             if OMEGACONF_AVAILABLE:
                 self.config = OmegaConf.load(config_path)
             else:
                 with open(config_path, 'r') as f:
                     self.config = yaml.safe_load(f)
-            self.path = Path(config_path)
+            self.path = config_path
         else:
+            # No path or dict provided - create new
             self.config = self._create_default_config()
             self.path = None
 
@@ -90,21 +102,17 @@ class Storyboard:
         Checks:
         - First scene starts at t=0
         - Scenes are contiguous (no gaps)
-        - Last scene matches audio duration
         - No overlapping scenes
+        - Last scene matches audio duration
 
         Raises:
             ValueError: If validation fails
         """
         errors = []
 
-        # Get scenes
-        if OMEGACONF_AVAILABLE:
-            scenes = self.config.get('scenes', [])
-            params = self.config.get('params', {})
-        else:
-            scenes = self.config.get('scenes', [])
-            params = self.config.get('params', {})
+        # Get scenes and params (same access pattern for both OmegaConf and dict)
+        scenes = self.config.get('scenes', [])
+        params = self.config.get('params', {})
 
         if not scenes:
             # Empty storyboard is valid
@@ -133,12 +141,17 @@ class Storyboard:
                     f"scene {i} ends at {scene_end:.3f}s, "
                     f"scene {i+1} starts at {next_start:.3f}s"
                 )
+            
+            # Check for overlap
+            if next_start < scene_end - 0.01:
+                errors.append(
+                    f"Overlap between scenes {i} and {i+1}: "
+                    f"scene {i} ends at {scene_end:.3f}s, "
+                    f"scene {i+1} starts at {next_start:.3f}s"
+                )
 
         # Last scene should match audio duration (if known)
-        if OMEGACONF_AVAILABLE:
-            audio_duration = params.get('audio_duration')
-        else:
-            audio_duration = params.get('audio_duration')
+        audio_duration = params.get('audio_duration')
 
         if audio_duration:
             last_end = scenes[-1].get('end_time')
@@ -150,7 +163,7 @@ class Storyboard:
 
         if errors:
             raise ValueError(
-                f"Storyboard validation failed:\n" +
+                "Storyboard validation failed:\n" +
                 "\n".join(f"  - {e}" for e in errors)
             )
 
@@ -185,7 +198,7 @@ class Storyboard:
                 )
 
         self.path = path
-        print(f"💾 Saved storyboard to {path}")
+        logger.info(f"💾 Saved storyboard to {path}")
 
     def compile(self) -> Dict:
         """
@@ -203,7 +216,7 @@ class Storyboard:
             compiled = copy.deepcopy(self.config)
 
         # Resolve theme references in scenes
-        for scene in compiled['scenes']:
+        for scene in compiled.get('scenes', []):
             if 'theme' in scene:
                 theme_id = scene['theme']
                 if theme_id in compiled.get('themes', {}):
@@ -236,7 +249,8 @@ class Storyboard:
         print("=" * 70)
         print(f"Project: {params.get('project_name', 'Unnamed')}")
         print(f"Audio: {params.get('audio_fpath', 'Not set')}")
-        print(f"Duration: {params.get('audio_duration', 0):.1f}s")
+        duration = params.get('audio_duration') or 0
+        print(f"Duration: {float(duration):.1f}s")
         print(f"Scenes: {len(scenes)}")
         print(f"Themes: {len(themes)}")
         print(f"FPS: {params.get('fps', 12)}")
@@ -250,12 +264,14 @@ class Storyboard:
                 duration = scene.get('end_time', 0) - scene.get('start_time', 0)
                 print(f"\n{i}: {scene.get('start_time', 0):.2f}s - {scene.get('end_time', 0):.2f}s ({duration:.2f}s)")
 
-                if 'text' in scene:
-                    text = scene['text'][:60] + "..." if len(scene.get('text', '')) > 60 else scene.get('text', '')
+                text_val = scene.get('text', '')
+                if text_val:
+                    text = text_val[:60] + "..." if len(text_val) > 60 else text_val
                     print(f"   Text: {text}")
 
-                if 'prompt' in scene:
-                    prompt = scene['prompt'][:60] + "..." if len(scene.get('prompt', '')) > 60 else scene.get('prompt', '')
+                prompt_val = scene.get('prompt', '')
+                if prompt_val:
+                    prompt = prompt_val[:60] + "..." if len(prompt_val) > 60 else prompt_val
                     print(f"   Prompt: {prompt}")
 
                 if 'theme' in scene:
@@ -349,19 +365,11 @@ def create_storyboard(project_name: str,
     """
     sb = Storyboard()
 
-    if OMEGACONF_AVAILABLE:
-        sb.config.params.project_name = project_name
-        sb.config.params.audio_fpath = audio_fpath
+    sb.config['params']['project_name'] = project_name
+    sb.config['params']['audio_fpath'] = audio_fpath
 
-        for key, value in kwargs.items():
-            if hasattr(sb.config.params, key):
-                setattr(sb.config.params, key, value)
-    else:
-        sb.config['params']['project_name'] = project_name
-        sb.config['params']['audio_fpath'] = audio_fpath
-
-        for key, value in kwargs.items():
-            sb.config['params'][key] = value
+    for key, value in kwargs.items():
+        sb.config['params'][key] = value
 
     return sb
 
@@ -376,11 +384,16 @@ def export_to_deforum(storyboard: Storyboard, output_path: Path):
     """
     compiled = storyboard.compile()
 
-    # Convert to Deforum format
+    # Convert to Deforum format - safely access resolution
+    resolution = compiled.get('params', {}).get('resolution')
+    if not resolution or len(resolution) < 2:
+        # Use default resolution if missing
+        resolution = [512, 512]
+    
     deforum_settings = {
-        'W': compiled['params']['resolution'][0],
-        'H': compiled['params']['resolution'][1],
-        'fps': compiled['params']['fps'],
+        'W': resolution[0],
+        'H': resolution[1],
+        'fps': compiled.get('params', {}).get('fps', 12),
         # Add more Deforum-specific mappings here
     }
 
@@ -388,4 +401,4 @@ def export_to_deforum(storyboard: Storyboard, output_path: Path):
     with open(output_path, 'w') as f:
         yaml.dump(deforum_settings, f, default_flow_style=False)
 
-    print(f"💾 Exported to Deforum format: {output_path}")
+    logger.info(f"💾 Exported to Deforum format: {output_path}")

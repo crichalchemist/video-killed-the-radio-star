@@ -9,6 +9,8 @@ FFmpeg-based video generation with support for:
 """
 
 import subprocess
+import textwrap
+import glob
 from pathlib import Path
 from typing import List, Optional, Union
 import numpy as np
@@ -70,13 +72,12 @@ def add_caption_to_frame(image: Union[np.ndarray, Image.Image],
             # Try to use a default system font
             try:
                 font = ImageFont.truetype("LiberationSans-Regular.ttf", font_size)
-            except:
+            except (OSError, IOError):
                 font = ImageFont.load_default()
-    except:
+    except (OSError, IOError):
         font = ImageFont.load_default()
 
     # Wrap text
-    import textwrap
     wrapped_text = textwrap.fill(text, width=wrap_width)
 
     # Get text bounding box
@@ -184,11 +185,20 @@ def compile_video(frame_dir: Path,
     # Upscale frames if requested
     if upscale:
         print(f"🔍 Upscaling frames {upscale_factor}x...")
+        
+        # Validate frame directory exists
+        if not frame_dir.exists():
+            print(f"❌ Frame directory not found: {frame_dir}")
+            return False
+        
         upscaled_dir = frame_dir.parent / 'frames_upscaled'
-        upscaled_dir.mkdir(exist_ok=True)
+        upscaled_dir.mkdir(parents=True, exist_ok=True)
 
-        import glob
         frames = sorted(glob.glob(str(frame_dir / '*.png')))
+        
+        if not frames:
+            print(f"❌ No frames found in {frame_dir}")
+            return False
 
         for i, frame_path in enumerate(frames):
             img = Image.open(frame_path)
@@ -229,11 +239,15 @@ def compile_video(frame_dir: Path,
     print(f"🎬 Compiling video: {output_path.name}")
     print(f"   FPS: {fps}, CRF: {crf}, Preset: {preset}")
 
-    # Run FFmpeg
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # Run FFmpeg with timeout
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        print("❌ FFmpeg timed out after 600 seconds")
+        return False
 
     if result.returncode != 0:
-        print(f"❌ FFmpeg failed:")
+        print("❌ FFmpeg failed:")
         print(result.stderr)
         return False
 
@@ -268,6 +282,11 @@ def compile_video_with_concat(frame_list: List[Path],
         >>> durations = [1/24] * 100  # 24 FPS
         >>> compile_video_with_concat(frames, durations, Path('out.mp4'))
     """
+    # Validate inputs
+    if len(frame_list) != len(durations):
+        print(f"❌ frame_list and durations length mismatch: {len(frame_list)} vs {len(durations)}")
+        return False
+    
     # Create concat file
     concat_file = output_path.parent / 'concat_list.txt'
 
@@ -307,15 +326,19 @@ def compile_video_with_concat(frame_list: List[Path],
 
     cmd.append(str(output_path))
 
-    print(f"🎬 Compiling video with variable frame durations...")
+    print("🎬 Compiling video with variable frame durations...")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    # Clean up concat file
-    concat_file.unlink()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        print("❌ FFmpeg timed out after 600 seconds")
+        return False
+    finally:
+        # Always clean up concat file
+        concat_file.unlink(missing_ok=True)
 
     if result.returncode != 0:
-        print(f"❌ FFmpeg failed:")
+        print("❌ FFmpeg failed:")
         print(result.stderr)
         return False
 

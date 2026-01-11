@@ -5,9 +5,13 @@ Extract and transform audio signals to drive animation parameters.
 Supports stem-based reactivity (vocals, drums, bass) and frequency-specific effects.
 """
 
+import logging
 import numpy as np
 from scipy import signal as scipy_signal
-from typing import List, Callable, Optional
+from scipy.signal import find_peaks
+from typing import List
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -28,6 +32,21 @@ def create_signal(audio_data: np.ndarray,
     Returns:
         RMS energy envelope
     """
+    # Validate inputs
+    if audio_data is None:
+        raise ValueError("audio_data cannot be None")
+    if len(audio_data) == 0:
+        raise ValueError("audio_data cannot be empty")
+    if not isinstance(audio_data, np.ndarray):
+        raise ValueError("audio_data must be a numpy array")
+    if audio_data.ndim > 1:
+        # Flatten multi-dimensional arrays
+        audio_data = audio_data.flatten()
+    if sr <= 0:
+        raise ValueError(f"sr must be positive, got {sr}")
+    if hop_length <= 0:
+        raise ValueError(f"hop_length must be positive, got {hop_length}")
+    
     import librosa
     rms = librosa.feature.rms(y=audio_data, hop_length=hop_length)[0]
     return rms
@@ -55,7 +74,25 @@ def bandpass_filter(signal_data: np.ndarray,
     Returns:
         Filtered signal
     """
+    # Validate inputs
+    if low_freq <= 0:
+        raise ValueError(f"low_freq must be positive, got {low_freq}")
+    if high_freq <= 0:
+        raise ValueError(f"high_freq must be positive, got {high_freq}")
+    if low_freq >= high_freq:
+        raise ValueError(f"low_freq ({low_freq}) must be less than high_freq ({high_freq})")
+    
     nyquist = sr / 2
+    if low_freq >= nyquist:
+        raise ValueError(f"low_freq ({low_freq}) must be less than Nyquist frequency ({nyquist})")
+    if high_freq >= nyquist:
+        raise ValueError(f"high_freq ({high_freq}) must be less than Nyquist frequency ({nyquist})")
+    
+    # Check signal length for filtfilt requirements
+    min_len = 3 * order
+    if len(signal_data) < min_len:
+        raise ValueError(f"signal_data length ({len(signal_data)}) must be at least {min_len} for order {order}")
+    
     low = low_freq / nyquist
     high = high_freq / nyquist
 
@@ -80,6 +117,14 @@ def envelope_follower(signal_data: np.ndarray,
     Returns:
         Envelope signal
     """
+    # Validate inputs
+    if signal_data is None or len(signal_data) == 0:
+        raise ValueError("signal_data must not be empty")
+    if attack <= 0:
+        raise ValueError(f"attack must be positive, got {attack}")
+    if release <= 0:
+        raise ValueError(f"release must be positive, got {release}")
+    
     envelope = np.zeros_like(signal_data)
     envelope[0] = abs(signal_data[0])
 
@@ -156,8 +201,6 @@ def detect_peaks(signal_data: np.ndarray,
     Returns:
         Binary signal (1 at peaks, 0 elsewhere)
     """
-    from scipy.signal import find_peaks
-
     # Normalize for threshold
     normalized = normalize_signal(signal_data)
 
@@ -223,7 +266,7 @@ def apply_transformations(signal_data: np.ndarray,
             result = detect_peaks(result, threshold)
 
         else:
-            print(f"⚠️  Unknown transformation: {transform_name}")
+            logger.warning(f"Unknown transformation: {transform_name}")
 
     return result
 

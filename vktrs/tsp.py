@@ -7,10 +7,10 @@ Optimized implementation (2026):
 - Scales to 100+ frames (vs 15 frame limit before)
 """
 
-import time
+import warnings
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Union
 from PIL import Image
 
 try:
@@ -19,17 +19,23 @@ try:
 except ImportError:
     IMAGEHASH_AVAILABLE = False
 
+# Initialize both flags
+ORTOOLS_AVAILABLE = False
+PYTHON_TSP_AVAILABLE = False
+
 try:
     from ortools.constraint_solver import pywrapcp, routing_enums_pb2
     ORTOOLS_AVAILABLE = True
 except ImportError:
-    ORTOOLS_AVAILABLE = False
+    pass
+
+if not ORTOOLS_AVAILABLE:
     # Fall back to python_tsp if ortools not available
     try:
-        from python_tsp.exact import solve_tsp_dynamic_programming
+        import python_tsp  # noqa: F401 - imported to check availability
         PYTHON_TSP_AVAILABLE = True
     except ImportError:
-        PYTHON_TSP_AVAILABLE = False
+        pass
 
 
 # ============================================================================
@@ -64,7 +70,16 @@ def compute_perceptual_hash(image: Union[np.ndarray, Image.Image],
         )
 
     if isinstance(image, np.ndarray):
-        image = Image.fromarray(image.astype(np.uint8))
+        # Handle float arrays in [0,1] range
+        if image.dtype.kind == 'f':
+            # Clip to [0,1] and scale to [0,255]
+            image = np.clip(image, 0, 1)
+            image = (image * 255).astype(np.uint8)
+        else:
+            # Integer types - ensure valid range
+            image = np.clip(image, 0, 255).astype(np.uint8)
+        
+        image = Image.fromarray(image)
 
     # pHash (perceptual hash) is robust to minor transformations
     hash_obj = imagehash.phash(image, hash_size=hash_size)
@@ -181,7 +196,13 @@ def solve_tsp_ortools(distance_matrix: np.ndarray,
     if not solution:
         if verbose:
             print("  ⚠️  No solution found, using greedy ordering")
-        return greedy_nearest_neighbor(distance_matrix), float('inf')
+        greedy_path = greedy_nearest_neighbor(distance_matrix)
+        # Compute actual distance for greedy path (closed tour)
+        greedy_distance = sum(
+            distance_matrix[greedy_path[i], greedy_path[(i+1) % len(greedy_path)]]
+            for i in range(len(greedy_path))
+        )
+        return greedy_path, greedy_distance
 
     # Extract solution
     permutation = []
@@ -219,6 +240,11 @@ def greedy_nearest_neighbor(distance_matrix: np.ndarray,
         List of node indices in visit order
     """
     num_nodes = len(distance_matrix)
+    if num_nodes == 0:
+        raise ValueError("distance_matrix must contain at least one node")
+    if not (0 <= start_node < num_nodes):
+        raise ValueError(f"start_node {start_node} out of range [0, {num_nodes})")
+    
     unvisited = set(range(num_nodes))
     path = [start_node]
     unvisited.remove(start_node)
@@ -260,7 +286,7 @@ def solve_tsp_dynamic_programming_legacy(distance_matrix: np.ndarray,
     n = len(distance_matrix)
     if n > 15 and verbose:
         print(f"⚠️  WARNING: Dynamic programming TSP with {n} nodes will be VERY slow!")
-        print(f"   Consider using solve_tsp_ortools() instead for 1000× speedup")
+        print("   Consider using solve_tsp_ortools() instead for 1000× speedup")
 
     from python_tsp.exact import solve_tsp_dynamic_programming
     permutation, distance = solve_tsp_dynamic_programming(distance_matrix)
@@ -302,6 +328,9 @@ def tsp_sort(frames: List[Union[np.ndarray, Image.Image]],
         >>> perm, dist = tsp_sort(frames[:10], method='pixel')
     """
     num_frames = len(frames)
+    
+    if num_frames == 0:
+        raise ValueError("frames must not be empty")
 
     if verbose:
         print(f"🎬 Sorting {num_frames} frames using TSP")
@@ -322,7 +351,7 @@ def tsp_sort(frames: List[Union[np.ndarray, Image.Image]],
         # Original pixel-based method (slow but accurate)
         if num_frames > 15 and verbose:
             print(f"  ⚠️  Warning: pixel method is slow for {num_frames} frames")
-            print(f"     Consider using method='perceptual' instead")
+            print("     Consider using method='perceptual' instead")
 
         frames_m = np.array([np.array(f).ravel() for f in frames])
         dmat = pdist(frames_m, metric='cosine')
@@ -336,24 +365,32 @@ def tsp_sort(frames: List[Union[np.ndarray, Image.Image]],
             time_limit_seconds=time_limit,
             verbose=verbose
         )
+        solution_method = "OR-Tools"
     elif PYTHON_TSP_AVAILABLE and num_frames <= 15:
         # Use dynamic programming for small problems
         if verbose:
-            print(f"  ℹ️  Using dynamic programming solver (exact, but slow)")
+            print("  ℹ️  Using dynamic programming solver (exact, but slow)")
         permutation, distance = solve_tsp_dynamic_programming_legacy(dmat, verbose=verbose)
+        solution_method = "Dynamic Programming (exact)"
     else:
         # Fall back to greedy (fast but approximate)
         if verbose:
-            print(f"  ℹ️  Using greedy nearest neighbor (fast approximation)")
+            print("  ℹ️  Using greedy nearest neighbor (fast approximation)")
         permutation = greedy_nearest_neighbor(dmat)
         # Compute distance
         distance = sum(
             dmat[permutation[i], permutation[(i+1) % len(permutation)]]
             for i in range(len(permutation))
         )
+        solution_method = "Greedy (approximate)"
 
     if verbose:
-        print(f"  ✓ Optimal frame order found")
+        if solution_method.startswith("OR-Tools"):
+            print(f"  ✓ Solution found ({solution_method})")
+        elif solution_method.startswith("Greedy"):
+            print("  ✓ Greedy approximation solution found")
+        else:
+            print(f"  ✓ Optimal solution found ({solution_method})")
         print(f"  ✓ Total visual distance: {distance:.4f}")
 
     return permutation, distance
@@ -410,5 +447,12 @@ def batched_tsp_permute_frames(frames: List, batch_size: int) -> List:
     Returns:
         List of frames in optimal order
     """
+    if batch_size is not None:
+        warnings.warn(
+            "batched_tsp_permute_frames batch_size parameter is ignored. "
+            "Use tsp_permute_frames() or tsp_sort() directly for better control.",
+            DeprecationWarning,
+            stacklevel=2
+        )
     # New solver is fast enough to handle all frames at once
     return tsp_permute_frames(frames, verbose=False)

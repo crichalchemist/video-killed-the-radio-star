@@ -1,12 +1,14 @@
 import io
 import os
+import logging
 from functools import lru_cache
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import warnings
 
-import torch
 from stability_sdk import client
 import stability_sdk.interfaces.gooseai.generation.generation_pb2 as generation
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -28,7 +30,7 @@ def get_api_client():
             "Get your API key at https://platform.stability.ai/account/keys"
         )
 
-    print("🔗 Creating Stability API client (reused for all requests)")
+    logger.info("🔗 Creating Stability API client (reused for all requests)")
     return client.StabilityInference(
         key=api_key,
         verbose=False,
@@ -38,7 +40,6 @@ def get_api_client():
 
 def get_image_for_prompt(prompt, max_retries=3, **kargs):
     stability_api = get_api_client()  # Reuses existing connection
-
 
     # auto-retry if mitigation triggered
     while max_retries:
@@ -85,10 +86,27 @@ def validate_environment():
     """
     capabilities = {
         'stability_api': 'STABILITY_KEY' in os.environ,
-        'cuda_available': torch.cuda.is_available(),
+        'cuda_available': False,
         'xformers_available': False,
-        'torch_version': torch.__version__,
     }
+    
+    # Try to import torch
+    try:
+        import torch
+        capabilities['torch_version'] = torch.__version__
+        capabilities['cuda_available'] = torch.cuda.is_available()
+        
+        if capabilities['cuda_available']:
+            try:
+                capabilities['gpu_name'] = torch.cuda.get_device_name(0)
+                capabilities['gpu_memory_gb'] = torch.cuda.get_device_properties(0).total_memory / 1e9
+            except Exception:
+                logger.exception("Error retrieving CUDA device information")
+                capabilities['gpu_name'] = None
+                capabilities['gpu_memory_gb'] = None
+    except ImportError:
+        logger.info("torch not available, skipping torch-specific checks")
+        capabilities['torch_version'] = None
 
     try:
         import xformers
@@ -97,26 +115,29 @@ def validate_environment():
     except ImportError:
         pass
 
-    if capabilities['cuda_available']:
-        capabilities['gpu_name'] = torch.cuda.get_device_name(0)
-        capabilities['gpu_memory_gb'] = torch.cuda.get_device_properties(0).total_memory / 1e9
-
     return capabilities
 
 
-def print_system_info():
-    """Print system capabilities for debugging"""
+def print_and_get_system_info():
+    """Print system capabilities for debugging and return the capabilities dict"""
     caps = validate_environment()
 
     print("=" * 60)
     print("🎬 VKTRS System Capabilities")
     print("=" * 60)
-    print(f"🔧 PyTorch version: {caps['torch_version']}")
+    if caps.get('torch_version'):
+        print(f"🔧 PyTorch version: {caps['torch_version']}")
     print(f"🎮 CUDA available: {caps['cuda_available']}")
 
     if caps['cuda_available']:
-        print(f"   GPU: {caps['gpu_name']}")
-        print(f"   Memory: {caps['gpu_memory_gb']:.1f} GB")
+        gpu_name = caps.get('gpu_name')
+        gpu_memory = caps.get('gpu_memory_gb')
+        if gpu_name is not None:
+            print(f"   GPU: {gpu_name}")
+        if gpu_memory is not None:
+            print(f"   Memory: {gpu_memory:.1f} GB")
+        if gpu_name is None or gpu_memory is None:
+            print("   (Unable to retrieve GPU details)")
     else:
         print("   Using CPU (slower, but works!)")
 
@@ -152,3 +173,7 @@ def print_system_info():
         print()
 
     return caps
+
+
+# Backward compatibility alias
+print_system_info = print_and_get_system_info
