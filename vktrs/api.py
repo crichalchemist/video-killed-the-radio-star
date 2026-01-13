@@ -85,7 +85,7 @@ def validate_environment():
     Returns dict with capability flags.
     """
     capabilities = {
-        'stability_api': 'STABILITY_KEY' in os.environ,
+        'has_stability_key': 'STABILITY_KEY' in os.environ,
         'cuda_available': False,
         'xformers_available': False,
     }
