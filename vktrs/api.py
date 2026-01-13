@@ -113,7 +113,8 @@ def validate_environment():
         capabilities['xformers_available'] = True
         capabilities['xformers_version'] = xformers.__version__
     except ImportError:
-        pass
+        logger.info("xformers not available, skipping xformers-specific checks")
+        capabilities['xformers_version'] = None
 
     return capabilities
 
