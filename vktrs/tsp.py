@@ -35,6 +35,8 @@ if not ORTOOLS_AVAILABLE:
         import python_tsp  # noqa: F401 - imported to check availability
         PYTHON_TSP_AVAILABLE = True
     except ImportError:
+        # python_tsp is an optional dependency; if unavailable, we leave
+        # PYTHON_TSP_AVAILABLE as False and rely on other (slower) solvers.
         pass
 
 
